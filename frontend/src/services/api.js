@@ -13,7 +13,7 @@
 import axios from "axios";
 
 const client = axios.create({
-  baseURL: import.meta.env.VITE_API_BASE_URL || "http://localhost:8000",
+  baseURL: import.meta.env.VITE_API_BASE_URL || "https://ai-backend-kx71.onrender.com",
   timeout: 120_000,   // 2 min — enterprise PDF generation can be slow
   headers: { "Content-Type": "application/json" },
 });
@@ -68,7 +68,7 @@ export async function generateCaseStudy(notes, accessToken) {
     return {
       ok:      false,
       type:    "network",
-      message: "Cannot reach the backend. Make sure it is running on http://localhost:8000.",
+      message: message: "Cannot reach the live backend. Please check your internet connection.",
     };
   }
 }
