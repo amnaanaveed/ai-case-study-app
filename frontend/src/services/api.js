@@ -66,9 +66,9 @@ export async function generateCaseStudy(notes, accessToken) {
     }
 
     return {
-      ok:      false,
-      type:    "network",
-      message: message: "Cannot reach the live backend. Please check your internet connection.",
-    };
+    ok: false,
+    type: "network",
+    message: "Cannot reach the live backend. Please check your internet connection."
+};
   }
 }
