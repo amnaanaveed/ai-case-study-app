@@ -110,7 +110,7 @@ class _ClinicalPDF(FPDF):
 
     def header(self):
         self.set_fill_color(*_TEAL_DARK)
-        self.rect(0, 0, 210, 20, style="F")
+        self.rect(0, 0, self.w, 20, style="F")
         self.set_y(5)
         self.set_font("Helvetica", "B", 13)
         self.set_text_color(*_WHITE)
@@ -127,7 +127,7 @@ class _ClinicalPDF(FPDF):
         self.set_y(-14)
         self.set_draw_color(*_TEAL_MID)
         self.set_line_width(0.4)
-        self.line(15, self.get_y(), 195, self.get_y())
+        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
         self.ln(1)
         self.set_font("Helvetica", "I", 7.5)
         self.set_text_color(*_MID_GRAY)
