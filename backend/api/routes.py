@@ -2,44 +2,25 @@
 api/routes.py
 --------------
 FastAPI router that wires the four pipeline services together.
-
-Endpoint: POST /api/v1/generate-case-study
-Input   : JSON body  { "notes": "<raw physiotherapy text>" }
-Output  : JSON body  { "drive_link": "<Google Drive URL>",
-                       "patient_data": { ... }  }
-
-Error responses follow RFC 7807 / standard FastAPI HTTPException format:
-    { "detail": "<human-readable message>" }
 """
 
 import logging
 from typing import Optional
-from fastapi import APIRouter, HTTPException, status, Header
+from fastapi import APIRouter, HTTPException, status, Header, Form, File, UploadFile
 from pydantic import BaseModel, Field
 
 from services.validation_service import validate_raw_notes
-from services.llm_service         import extract_clinical_data
-from services.pdf_service         import generate_pdf
-from services.drive_service       import upload_to_drive
+from services.llm_service        import extract_clinical_data
+from services.pdf_service        import generate_pdf
+from services.drive_service      import upload_to_drive
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
 # ------------------------------------------------------------------ #
-# Request / Response schemas (route-level, NOT the LLM schema)       #
+# Response schema (Request schema hata diya kyunke ab Form Data hai) #
 # ------------------------------------------------------------------ #
-
-class GenerateRequest(BaseModel):
-    """Body expected by the generate endpoint."""
-    notes: str = Field(
-        ...,
-        min_length=30,
-        description="Raw, unstructured physiotherapy session notes.",
-        examples=["Patient age 45, male. Lower back pain 7/10. Applied SWD 15 min."],
-    )
-
 
 class GenerateResponse(BaseModel):
     """Successful response payload."""
@@ -56,21 +37,16 @@ class GenerateResponse(BaseModel):
     "/generate-case-study",
     response_model=GenerateResponse,
     status_code=status.HTTP_200_OK,
-    summary="Generate a clinical case study from raw physiotherapy notes.",
-    description=(
-        "Validates raw notes locally, extracts structured clinical data via LLM, "
-        "generates a formatted PDF, uploads it to Google Drive, and returns the "
-        "shareable link."
-    ),
+    summary="Generate a clinical case study from notes and/or images.",
     tags=["Case Study"],
 )
 async def generate_case_study(
-    body: GenerateRequest,
-    authorization: Optional[str] = Header(None) # Catches the token from React!
+    authorization: Optional[str] = Header(None), # Catches the token from React!
+    notes: Optional[str] = Form(""),             # 🔥 Text input (optional)
+    file: Optional[UploadFile] = File(None)      # 🔥 Image input (optional)
 ) -> GenerateResponse:
     """
-    Full pipeline:
-        Raw text → Validation → LLM extraction → PDF generation → Drive upload
+    Full pipeline: Text/Image → Validation → LLM extraction → PDF → Drive
     """
 
     # --- SECURITY CHECK ---
@@ -80,31 +56,47 @@ async def generate_case_study(
             detail="Missing Google Access Token. Please sign in on the frontend first."
         )
     
-    # Extract the actual token string
     user_access_token = authorization.split("Bearer ")[1]
+    raw_notes = notes.strip() if notes else ""
+    
+    logger.info("Received request. Text length: %d, File attached: %s", len(raw_notes), bool(file))
 
-    raw_notes: str = body.notes.strip()
-    logger.info("Received generate-case-study request (%d chars).", len(raw_notes))
-
-    # ── Step 1: Zero-token local validation ───────────────────────── #
-    validation_result = validate_raw_notes(raw_notes)
-
-    if validation_result["status"] == "error":
-        logger.warning("Validation failed: %s", validation_result.get("missing"))
+    # ── Step 1: Validation (Zero-token check) ─────────────────────── #
+    # Agar na text hai aur na file, toh error do
+    if not file and len(raw_notes) < 30:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={
-                "error":   "Validation failed – insufficient clinical data.",
-                "missing": validation_result.get("missing", []),
-                "message": validation_result.get("message", ""),
-            },
+            detail={"message": "Please provide enough text notes or upload a prescription picture."}
         )
 
-    logger.info("Local validation passed.")
+    # Agar sirf text hai (file nahi hai), tabhi local validation karo
+    if not file:
+        validation_result = validate_raw_notes(raw_notes)
+        if validation_result["status"] == "error":
+            logger.warning("Validation failed: %s", validation_result.get("missing"))
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail={
+                    "error":   "Validation failed – insufficient clinical data.",
+                    "missing": validation_result.get("missing", []),
+                    "message": validation_result.get("message", ""),
+                },
+            )
+        logger.info("Local validation passed (Text only).")
+    else:
+        logger.info("File uploaded, skipping local text validation (LLM will handle it).")
+
+    # ── Prepare Image Data for LLM ────────────────────────────────── #
+    image_bytes = None
+    mime_type = None
+    if file:
+        image_bytes = await file.read() # Image ko memory mein parh liya
+        mime_type = file.content_type
 
     # ── Step 2: LLM JSON extraction ───────────────────────────────── #
     try:
-        patient_data: dict = extract_clinical_data(raw_notes)
+        # 🔥 UPDATE: Ab extract_clinical_data ko image data bhi bhej rahe hain
+        patient_data: dict = extract_clinical_data(raw_notes, image_bytes, mime_type)
         logger.info("LLM extraction successful.")
     except (ValueError, RuntimeError) as exc:
         logger.error("LLM extraction failed: %s", exc)
@@ -126,7 +118,6 @@ async def generate_case_study(
 
     # ── Step 4: Google Drive upload ───────────────────────────────── #
     try:
-        # Pass the frontend token to the drive service!
         drive_link: str = upload_to_drive(pdf_path, user_access_token)
         logger.info("PDF uploaded. Drive link: %s", drive_link)
     except Exception as exc:
