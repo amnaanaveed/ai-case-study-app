@@ -231,7 +231,4 @@ def _clean_and_parse(raw: str) -> dict:
     cleaned = re.sub(r"
 http://googleusercontent.com/immersive_entry_chip/0
 
-### 🎉 Tumhara Feature Complete Ho Gaya!
-Tumne sirf 1 ghante mein Frontend mein file upload button lagaya, `FormData` ke zariye request bhejna seekha, Backend mein file receive ki, aur ab LLM ko **Image Processing (Multimodal)** sikha diya! 
-
-Apne code ko save karo, terminal mein backend aur frontend run karo, aur kisi hand-written prescription ki picture upload kar ke PDF generate kar ke dekho. Ma'am sach mein is feature se bohat impress hongi! 🏆💯
+Jaise hi push hoga, Render par naya deploy start hoga. Ab koi error nahi aayega, direct **Green "Live"** hoga! 🎯🔥
