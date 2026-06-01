@@ -3,12 +3,12 @@ services/llm_service.py
 ------------------------
 Enterprise LLM extraction service.
 
-Produces a fully populated ClinicalCaseStudy JSON from rough notes and/or prescription images.
+Produces a fully populated ClinicalCaseStudy JSON from rough notes.
 
 Fallback chain
 --------------
-1. PRIMARY  → Gemini 1.5 Flash   (google-generativeai) [Supports Text + Vision]
-2. FALLBACK → Groq llama-3.3-70b (groq)                [Supports Text Only]
+1. PRIMARY  → Gemini 2.5 Flash   (google-generativeai)
+2. FALLBACK → Groq llama-3.3-70b (groq)
 """
 
 import json
@@ -27,8 +27,7 @@ logger = logging.getLogger(__name__)
 
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
 GROQ_API_KEY:   str = os.getenv("GROQ_API_KEY",   "")
-# 🔥 UPDATE: Model fixed to gemini-1.5-flash for proper multimodal support
-GEMINI_MODEL:   str = os.getenv("GEMINI_MODEL",    "gemini-1.5-flash")
+GEMINI_MODEL:   str = os.getenv("GEMINI_MODEL",    "gemini-2.5-flash")
 GROQ_MODEL:     str = os.getenv("GROQ_MODEL",      "llama-3.3-70b-versatile")
 
 # =========================================================================
@@ -231,7 +230,99 @@ REQUIRED JSON SCHEMA — output must match this structure exactly
 # ── Defensive JSON parser ─────────────────────────────────────────── #
 def _clean_and_parse(raw: str) -> dict:
     """Strip markdown fences and extract the outermost JSON object."""
-    cleaned = re.sub(r"
-http://googleusercontent.com/immersive_entry_chip/0
+    cleaned = re.sub(r"```(?:json)?", "", raw).strip("`").strip()
+    start = cleaned.find("{")
+    end   = cleaned.rfind("}") + 1
+    if start == -1 or end == 0:
+        raise ValueError(f"No JSON object found in LLM output: {raw[:300]!r}")
+    return json.loads(cleaned[start:end])
 
-Is dafa JSON bilkul theek jayega aur code 100% sahi chalega!
+
+# ── Pydantic validation ───────────────────────────────────────────── #
+def _validate(raw_dict: dict) -> Dict[str, Any]:
+    try:
+        return ClinicalCaseStudy(**raw_dict).model_dump()
+    except ValidationError as exc:
+        logger.warning("Pydantic validation issues (non-fatal): %s", exc)
+        # Return raw dict with defaults applied rather than crashing
+        return ClinicalCaseStudy.model_validate(raw_dict, strict=False).model_dump()
+
+
+# ── Provider: Gemini ──────────────────────────────────────────────── #
+def _call_gemini(text: str) -> Dict[str, Any]:
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not set.")
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel(
+        model_name=GEMINI_MODEL,
+        system_instruction=_SYSTEM_PROMPT,
+    )
+    user_msg = (
+        "You are documenting a physiotherapy assessment. Read the rough session "
+        "notes below and produce the full clinical case study JSON exactly as "
+        "instructed in your system prompt. Expand every section comprehensively.\n\n"
+        f"ROUGH SESSION NOTES:\n{text}"
+    )
+    response = model.generate_content(
+        user_msg,
+        generation_config=genai.types.GenerationConfig(
+            temperature=0.2,
+            max_output_tokens=8192,
+        ),
+    )
+    raw = response.text or ""
+    logger.debug("Gemini raw output length: %d chars", len(raw))
+    return _validate(_clean_and_parse(raw))
+
+
+# ── Provider: Groq ────────────────────────────────────────────────── #
+def _call_groq(text: str) -> Dict[str, Any]:
+    if not GROQ_API_KEY:
+        raise RuntimeError("GROQ_API_KEY is not set.")
+    client = Groq(api_key=GROQ_API_KEY)
+    user_msg = (
+        "You are documenting a physiotherapy assessment. Read the rough session "
+        "notes below and produce the full clinical case study JSON exactly as "
+        "instructed in your system prompt. Expand every section comprehensively.\n\n"
+        f"ROUGH SESSION NOTES:\n{text}"
+    )
+    completion = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user",   "content": user_msg},
+        ],
+        temperature=0.2,
+        max_tokens=8192,
+    )
+    raw = completion.choices[0].message.content or ""
+    logger.debug("Groq raw output length: %d chars", len(raw))
+    return _validate(_clean_and_parse(raw))
+
+
+# ── Public API ────────────────────────────────────────────────────── #
+def extract_clinical_data(text: str) -> Dict[str, Any]:
+    """
+    Extract a full enterprise clinical case study from rough notes.
+    Tries Gemini first; falls back to Groq on any failure.
+    """
+    gemini_exc = None
+    try:
+        logger.info("Calling Gemini (%s) for clinical extraction...", GEMINI_MODEL)
+        result = _call_gemini(text)
+        logger.info("Gemini extraction successful.")
+        return result
+    except Exception as exc:
+        gemini_exc = exc
+        logger.warning("Gemini failed (%s). Trying Groq fallback...", exc)
+
+    try:
+        logger.info("Calling Groq (%s) for clinical extraction...", GROQ_MODEL)
+        result = _call_groq(text)
+        logger.info("Groq extraction successful.")
+        return result
+    except Exception as groq_exc:
+        logger.error("Both providers failed. Gemini: %s | Groq: %s", gemini_exc, groq_exc)
+        raise RuntimeError(
+            f"Both LLM providers failed. Gemini: {gemini_exc} | Groq: {groq_exc}"
+        ) from groq_exc
