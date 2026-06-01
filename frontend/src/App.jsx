@@ -2,6 +2,14 @@
  * src/App.jsx
  * ------------
  * Root component — owns all shared state.
+ *
+ * State
+ * -----
+ * notes        string   Textarea value
+ * isLoading    bool     Pipeline running
+ * result       object   Normalised API response
+ * accessToken  string   Google OAuth access token (null = not signed in)
+ * recentCases  array    Persisted history (localStorage)
  */
 
 import { useState, useCallback } from "react";
@@ -32,7 +40,6 @@ function saveCases(cases) {
 
 export default function App() {
   const [notes,       setNotes]       = useState("");
-  const [image,       setImage]       = useState(null); // 🔥 Nayi state picture ke liye
   const [isLoading,   setIsLoading]   = useState(false);
   const [result,      setResult]      = useState(null);
   const [accessToken, setAccessToken] = useState(null);
@@ -41,7 +48,6 @@ export default function App() {
   // ── Reset workspace ───────────────────────────────────────────────── //
   const handleNewSession = useCallback(() => {
     setNotes("");
-    setImage(null); // 🔥 Jab naya session bane toh picture bhi clear ho jaye
     setResult(null);
   }, []);
 
@@ -56,17 +62,13 @@ export default function App() {
 
   // ── Pipeline trigger ──────────────────────────────────────────────── //
   const handleSubmit = useCallback(async () => {
-    // 🔥 Update: Ya toh notes hon YA image upload hui ho
-    const hasContent = notes.trim().length > 0 || image !== null;
-    
-    if (!hasContent || isLoading || !accessToken) return;
+    if (!notes.trim() || isLoading || !accessToken) return;
 
     setIsLoading(true);
     setResult(null);
 
     try {
-      // 🔥 Update: Ab notes ke sath image bhi API ko bheji jayegi
-      const response = await generateCaseStudy(notes, image, accessToken);
+      const response = await generateCaseStudy(notes, accessToken);
       setResult(response);
 
       // ── Push to history on success ───────────────────────────────── //
@@ -83,7 +85,7 @@ export default function App() {
         ]
           .filter(Boolean)
           .join(" — ")
-          .slice(0, 72);                                        // keep it short
+          .slice(0, 72);                                         // keep it short
 
         const newCase = {
           id:        Date.now(),
@@ -109,7 +111,7 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
-  }, [notes, image, isLoading, accessToken]); // 🔥 dependency array mein image add kar di
+  }, [notes, isLoading, accessToken]);
 
   return (
     <div className="app-grid">
@@ -123,8 +125,6 @@ export default function App() {
       <Workspace
         notes={notes}
         setNotes={setNotes}
-        image={image}             // 🔥 Pass image state
-        setImage={setImage}       // 🔥 Pass setImage function
         onSubmit={handleSubmit}
         isLoading={isLoading}
         isSignedIn={!!accessToken}
